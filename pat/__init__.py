@@ -39,6 +39,7 @@ def add_noise_to_vector(vector, label_noise):
     if isinstance(label_noise, float) and 0 < label_noise <= 1:
         num_elements = vector.size()[0]
         num_noise_elements = int(label_noise * num_elements)
+        print(f"Inverting {num_noise_elements} out of {len(labels)} sample labels")
         noise_indices = random.sample(range(num_elements), num_noise_elements)
         noisy_vector = torch.zeros(num_elements)
         noisy_vector.copy_(vector)
@@ -52,6 +53,7 @@ def add_label_noise(vector, label_noise=None):
     if isinstance(label_noise, float) and 0 < label_noise <= 1:
         num_elements = vector.size()[0]
         num_noise_elements = int(label_noise * num_elements)
+        print(f"Inverting {num_noise_elements} out of {len(labels)} sample labels")
         noise_indices = random.sample(range(num_elements), num_noise_elements)
         noisy_vector = torch.zeros((1000, 1), dtype=torch.bool)
         noisy_vector.copy_(vector)
