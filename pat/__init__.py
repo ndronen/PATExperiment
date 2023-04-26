@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import os
 from collections import OrderedDict
 
@@ -14,6 +12,8 @@ from plotly.subplots import make_subplots
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold
+import torch
+from torch.distributions.multivariate_normal import MultivariateNormal
 
 try:
     import skdim
@@ -25,24 +25,46 @@ except ImportError:
 def invert_binary_label(x):
     return 0. if x == 1. else 1.
 
+def add_noise_to_vector(vector, label_noise):
+    """
+    Adds random binary noise to a PyTorch vector.
 
-def add_label_noise(labels, label_noise=None):
+    Args:
+    vector (torch.Tensor): A 1D PyTorch tensor.
+    noise_rate (float): The percentage of elements in the vector to add noise to (between 0 and 1).
+
+    Returns:
+    torch.Tensor: The vector with added noise.
+    """
     if isinstance(label_noise, float) and 0 < label_noise <= 1:
-        n_noisy = int(len(labels) * label_noise)
-        print(f"Inverting {n_noisy} out of {len(labels)} sample labels")
-        indices = torch.range(0, len(labels) - 1)
-        to_invert = torch.multinomial(indices, n_noisy, replacement=False)
-        labels[to_invert] = torch.tensor(
-            [invert_binary_label(t) for t in labels[to_invert]]
-        )
-    return labels
+        num_elements = vector.size()[0]
+        num_noise_elements = int(label_noise * num_elements)
+        noise_indices = random.sample(range(num_elements), num_noise_elements)
+        noisy_vector = torch.zeros(num_elements)
+        noisy_vector.copy_(vector)
+        for index in noise_indices:
+            noisy_vector[index] = random.randint(0, 1)
+        vector=noisy_vector
+    return vector
+
+
+def add_label_noise(vector, label_noise=None):
+    if isinstance(label_noise, float) and 0 < label_noise <= 1:
+        num_elements = vector.size()[0]
+        num_noise_elements = int(label_noise * num_elements)
+        noise_indices = random.sample(range(num_elements), num_noise_elements)
+        noisy_vector = torch.zeros((1000, 1), dtype=torch.bool)
+        noisy_vector.copy_(vector)
+        for index in noise_indices:
+            noisy_vector[index] = invert_binary_label(vector[index])
+        vector=noisy_vector
+    return vector
 
 
 def make_data(
     n_samples, n_dim, n_intrinsic_dim, coefs=None, label_noise=None
 ):
     """Make multivariate Gaussian data with two classes.
-
     The class of a sample is 0 if it lies on the negative side of a linear
     hyperplane and 1 otherwise. If `label_noise` is not None, it must be
     in the range [0, 1], and that fraction of the labels are randomly inverted.
@@ -59,9 +81,11 @@ def make_data(
     if coefs is None:
         coefs = torch.randn(n_dim)
     target = (input * coefs).sum(dim=1) > 0
+    target = add_noise_to_vector(target, label_noise=label_noise)
     target = target.float()
-    target = add_label_noise(target, label_noise=label_noise)
+    #target = add_label_noise(target, label_noise=label_noise)
     target = target.reshape((n_samples, 1))
+
 
     return input, target
 
@@ -70,7 +94,6 @@ def make_data_nonlinear(
     n_samples:int, n_dim:int, i_dim:int, label_noise=None
     ):
     """Make multivariate Gaussian data with two classes.
-
     The class of a sample is determined by whether it's on the positive or
     negative side of a linear hyperplane.
     """
@@ -95,7 +118,8 @@ def make_data_nonlinear(
 
     input = torch.tensor(np.vstack((data1, data2))).float()
     target = torch.tensor([0.] * len(data1) + [1.] * len(data2))
-    target = add_label_noise(target, label_noise=label_noise)
+    target = add_noise_to_vector(target, label_noise=label_noise)
+    #target = add_label_noise(target, label_noise=label_noise)
     # The target must be 2-dimensional.
     target.unsqueeze_(-1)
 
@@ -109,7 +133,7 @@ def get_twonn_dim(data):
     return two_nn.dimension_
 
 
-def train_val_test_split(input, target, batch_size):
+def train_val_test_split(input, target, batch_size, add_label_noise_train= False):
     """split data into train, val, test with ratio 8:1:1 and return as DataLoader class
       """
     input = input.clone()
@@ -249,3 +273,32 @@ def cross_validation(model, data, target, n_splits, lr=0.01, epochs=30):
 
     return sum(aucs) / n_splits
 
+def get_num_classes(model):
+    num_classes = list(model.children())[-1].out_features
+    return num_classes
+
+
+def compute_accuracy(model, loader):
+    num_classes = get_num_classes(model)
+
+    preds = []
+    labels = []
+
+    model.eval()
+    
+    for x, y in loader:
+        labels.append(y)
+        with torch.no_grad():
+            yhat = model(x)
+        if num_classes == 1:
+            pred = yhat.round()
+        else:
+            pred = yhat.argmax(dim=-1)
+        preds.append(pred)
+
+    labels = torch.cat(labels)
+    preds = torch.cat(preds)
+    
+    accuracy = (preds == labels).sum() / len(preds)
+
+    return 100 * accuracy
